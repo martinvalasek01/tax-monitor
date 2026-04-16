@@ -1,0 +1,56 @@
+name: Daily VAT Digest
+
+on:
+  schedule:
+    # 06:00 Europe/Prague in summer (CEST = UTC+2) and winter (CET = UTC+1).
+    # Both fire year-round; main.py is idempotent (DB has_run_today check),
+    # so only the one that lands at CZ 06:00 actually sends an email.
+    - cron: "0 4 * * 1-5"   # summer: 04:00 UTC = 06:00 CEST
+    - cron: "0 5 * * 1-5"   # winter: 05:00 UTC = 06:00 CET
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # needed so we can commit the updated state.db
+
+concurrency:
+  group: tax-monitor-daily
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run monitor
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECIPIENT: leitnerczechia@gmail.com
+        run: python main.py
+
+      - name: Persist state.db
+        if: always()
+        run: |
+          if [ -f state.db ] && ! git diff --quiet -- state.db; then
+            git config user.name "tax-monitor bot"
+            git config user.email "tax-monitor@users.noreply.github.com"
+            git add state.db
+            git commit -m "chore: update state.db [skip ci]"
+            git push
+          else
+            echo "state.db unchanged — nothing to commit."
+          fi
