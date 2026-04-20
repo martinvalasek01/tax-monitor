@@ -20,27 +20,31 @@ log = logging.getLogger("tax-monitor")
 
 PRAGUE = ZoneInfo("Europe/Prague")
 RECIPIENT = os.environ.get("RECIPIENT", "leitnerczechia@gmail.com")
+FORCE = os.environ.get("TAX_MONITOR_FORCE") == "1"
 
 
 def main() -> int:
     now_cz = datetime.now(PRAGUE)
     run_date = now_cz.strftime("%Y-%m-%d")
 
-    if now_cz.weekday() >= 5:
+    if FORCE:
+        log.info("TAX_MONITOR_FORCE=1 — bypassing weekend / already-ran / morning-window guards.")
+
+    if not FORCE and now_cz.weekday() >= 5:
         log.info("Weekend in Prague (%s) — skipping.", now_cz.strftime("%A"))
         return 0
 
     # Idempotency: if we already emailed today, do nothing. GitHub Actions
     # runs two crons (DST-aware) and we want exactly one send per workday.
     with db.connect() as conn:
-        if db.has_run_today(conn, run_date):
+        if not FORCE and db.has_run_today(conn, run_date):
             log.info("Already ran for %s — skipping second fire.", run_date)
             return 0
 
         # We schedule two UTC crons (04:00 and 05:00) to cover both DST states,
         # but only the one that lands at 06:00 CZ should actually send. Allow
         # 06:00–07:59 to tolerate cron drift (GitHub Actions can delay 5–15 min).
-        if not (6 <= now_cz.hour <= 7):
+        if not FORCE and not (6 <= now_cz.hour <= 7):
             log.info("Outside morning window (CZ hour=%d) — skipping.", now_cz.hour)
             return 0
 
