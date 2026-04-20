@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 SEARCH_URL = "https://vyhledavac.nssoud.cz/"
 USER_AGENT = (
     "Mozilla/5.0 (tax-monitor; +https://github.com/) "
-    "Python-requests/2 — daily VAT monitoring"
+    "Python-requests/2 - daily VAT monitoring"
 )
 TIMEOUT = 30
 LOOKBACK_DAYS = 7   # defensive: catch anything published up to a week ago that we missed

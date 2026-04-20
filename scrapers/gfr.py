@@ -1,4 +1,4 @@
-"""GFŘ novinky scraper — financnisprava.gov.cz/cs/financni-sprava/novinky.
+"""GFŘ novinky scraper — financnisprava.cz/cs/financni-sprava/novinky.
 
 Pulls the latest news list and keeps items whose title/perex mentions DPH.
 """
@@ -16,10 +16,10 @@ from .base import ScrapedItem
 
 log = logging.getLogger(__name__)
 
-NOVINKY_URL = "https://www.financnisprava.gov.cz/cs/financni-sprava/novinky"
+NOVINKY_URL = "https://www.financnisprava.cz/cs/financni-sprava/novinky"
 USER_AGENT = (
     "Mozilla/5.0 (tax-monitor; +https://github.com/) "
-    "Python-requests/2 — daily VAT monitoring"
+    "Python-requests/2 - daily VAT monitoring"
 )
 TIMEOUT = 30
 DPH_TERMS = ("dph", "daň z přidané hodnoty", "daně z přidané hodnoty")
