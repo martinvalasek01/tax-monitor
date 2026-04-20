@@ -51,9 +51,10 @@ def main() -> int:
         log.info("Starting run for %s (CZ %s)", run_date, now_cz.isoformat())
 
         scraped: list[ScrapedItem] = []
-        scraped.extend(fetch_nss())
-        scraped.extend(fetch_gfr())
-        scraped.extend(fetch_eurlex())
+        for name, fn in (("NSS", fetch_nss), ("GFŘ", fetch_gfr), ("EUR-Lex", fetch_eurlex)):
+            items = fn()
+            log.info("%s: %d items", name, len(items))
+            scraped.extend(items)
         log.info("Total scraped: %d", len(scraped))
 
         new_items: list[ScrapedItem] = []
