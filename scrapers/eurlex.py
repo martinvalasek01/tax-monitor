@@ -1,36 +1,50 @@
-"""EUR-Lex scraper — new CJEU judgments mentioning "value added tax".
+"""EUR-Lex scraper — Publications Office SPARQL endpoint.
 
-Uses the EUR-Lex advanced search RSS feed (Case law, judgments only), so we
-don't have to scrape the HTML search UI. Each entry in the feed has a CELEX
-identifier which we use as stable dedup key.
+The public EUR-Lex search (eur-lex.europa.eu) sits behind Amazon
+CloudFront, which serves HTTP 202 + empty body + `x-amzn-waf-action:
+challenge` to non-browser clients — feedparser silently sees 0
+entries. The Publications Office SPARQL endpoint at
+publications.europa.eu is not WAFed and exposes the same judgment
+metadata via structured queries, so we filter for CJEU / General
+Court judgments whose English title contains "value added tax".
 """
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
-import feedparser
+import requests
 
 from .base import ScrapedItem
 
 log = logging.getLogger(__name__)
 
-# EUR-Lex "expert search" RSS: judgments (DTT_6) with the phrase "value added tax",
-# sorted by document date descending. The URL is taken from EUR-Lex's own
-# "Save as RSS" button on a filtered search; change the qid timestamp if needed.
-SEARCH_RSS = (
-    "https://eur-lex.europa.eu/EN/search.html"
-    "?SUBDOM_INIT=EU_CASE_LAW"
-    "&DTS_DOM=EU_LAW"
-    "&typeOfActStatus=COURT_JUDGMENT"
-    "&type=advanced"
-    "&lang=en"
-    "&andText0=%22value+added+tax%22"
-    "&sortOneOrder=desc"
-    "&sortOne=DD"
-    "&format=RSS"
-)
-USER_AGENT = "tax-monitor/1.0 (+https://github.com/)"
+SPARQL_URL = "https://publications.europa.eu/webapi/rdf/sparql"
+# Mozilla-style UA: the endpoint 403s the default requests UA.
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) tax-monitor/1.0"
+TIMEOUT = 60
+LOOKBACK_DAYS = 60  # CJEU publishes VAT judgments every ~1–3 weeks; keep a safe margin.
+CELEX_URL_TMPL = "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:{celex}"
+
+QUERY_TMPL = """
+PREFIX cdm: <http://publications.europa.eu/ontology/cdm#>
+PREFIX lang: <http://publications.europa.eu/resource/authority/language/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+SELECT DISTINCT ?celex ?date ?title WHERE {{
+  ?work cdm:work_has_resource-type <http://publications.europa.eu/resource/authority/resource-type/JUDG> .
+  ?work cdm:resource_legal_id_celex ?celex .
+  ?work cdm:work_date_document ?date .
+  ?expr cdm:expression_belongs_to_work ?work .
+  ?expr cdm:expression_uses_language lang:ENG .
+  ?expr cdm:expression_title ?title .
+  FILTER (CONTAINS(LCASE(STR(?title)), "value added tax"))
+  FILTER (?date >= "{from_date}"^^xsd:date)
+}}
+ORDER BY DESC(?date)
+LIMIT 100
+"""
 
 
 def fetch_eurlex() -> list[ScrapedItem]:
@@ -42,38 +56,33 @@ def fetch_eurlex() -> list[ScrapedItem]:
 
 
 def _fetch() -> Iterable[ScrapedItem]:
-    feed = feedparser.parse(SEARCH_RSS, agent=USER_AGENT, request_headers={"Accept": "application/rss+xml"})
-    if feed.bozo:
-        log.warning("EUR-Lex feed parse warning: %s", feed.bozo_exception)
+    from_date = (datetime.now(timezone.utc).date() - timedelta(days=LOOKBACK_DAYS)).isoformat()
+    resp = requests.get(
+        SPARQL_URL,
+        params={"query": QUERY_TMPL.format(from_date=from_date)},
+        headers={
+            "Accept": "application/sparql-results+json",
+            "User-Agent": USER_AGENT,
+        },
+        timeout=TIMEOUT,
+    )
+    resp.raise_for_status()
+    rows = resp.json().get("results", {}).get("bindings", [])
+    for row in rows:
+        celex = row["celex"]["value"]
+        title = row["title"]["value"]
+        raw_date = row["date"]["value"]  # ISO date, possibly with tz suffix
 
-    for entry in feed.entries:
-        title = (entry.get("title") or "").strip()
-        link = (entry.get("link") or "").strip()
-        if not title or not link:
-            continue
-
-        celex = _extract_celex(link) or link
-        item_date = _extract_date(entry)
+        # EUR-Lex titles use '#' to separate sections
+        # (court+date, parties, proceeding type, subject keywords).
+        # Keep the first two chunks — most informative, bounded length.
+        parts = [p.strip() for p in title.split("#") if p.strip()]
+        clean_title = " — ".join(parts[:2]) if parts else title
 
         yield ScrapedItem(
             source="EUR-Lex",
             item_key=celex,
-            title=title[:250],
-            url=link,
-            item_date=item_date,
+            title=clean_title[:250],
+            url=CELEX_URL_TMPL.format(celex=celex),
+            item_date=raw_date[:10],
         )
-
-
-def _extract_celex(url: str) -> str | None:
-    # EUR-Lex URLs include "CELEX:<id>" or "CELEX%3A<id>" in query string or path.
-    import re
-    m = re.search(r"CELEX[:%]3?A?([0-9A-Z]+)", url, re.IGNORECASE)
-    return m.group(1) if m else None
-
-
-def _extract_date(entry) -> str:
-    # feedparser exposes published_parsed as a time.struct_time
-    if getattr(entry, "published_parsed", None):
-        t = entry.published_parsed
-        return f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d}"
-    return entry.get("published", "") or ""
