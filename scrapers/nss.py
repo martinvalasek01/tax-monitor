@@ -1,8 +1,14 @@
 """NSS scraper — vyhledavac.nssoud.cz.
 
-Searches for finanční agenda (Afs) with DPH keyword. The NSS search UI is
-a JSF app; we POST the search form and parse result rows. Selectors target
-the current public page structure — if NSS redesigns the site, adjust here.
+The search form is an ASP.NET MVC app with a deep model-binding schema
+(vyhledavaciSekce[i].vyhledavaciPodminka[j]...). We harvest every input
+from the landing page — including the antiforgery token — override only
+the two values we care about (full-text phrase + date range), and POST
+to /Home/Index?formular=1&zobrazeniVysledkuVolba=2. Results come back
+as table#tresults rows.
+
+Selectors target the current public page structure — if NSS redesigns
+the site, adjust here.
 """
 from __future__ import annotations
 
@@ -10,22 +16,28 @@ import logging
 import re
 from datetime import datetime, timedelta
 from typing import Iterable
+from urllib.parse import urljoin
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from .base import ScrapedItem
 
 log = logging.getLogger(__name__)
 
-SEARCH_URL = "https://vyhledavac.nssoud.cz/"
+BASE_URL = "https://vyhledavac.nssoud.cz/"
+SUBMIT_URL = "https://vyhledavac.nssoud.cz/Home/Index?formular=1&zobrazeniVysledkuVolba=2"
 USER_AGENT = (
-    "Mozilla/5.0 (tax-monitor; +https://github.com/) "
-    "Python-requests/2 - daily VAT monitoring"
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) tax-monitor/1.0 Safari/537.36"
 )
 TIMEOUT = 30
-LOOKBACK_DAYS = 7   # defensive: catch anything published up to a week ago that we missed
-DPH_TERMS = ("daň z přidané hodnoty", "DPH")
+LOOKBACK_DAYS = 7
+
+FULLTEXT_FIELD = "vyhledavaciSekce[3].vyhledavaciPodminka[0].vyhledavaciPodminkaHodnota[0].HodnotaText"
+DATE_FROM_FIELD = "vyhledavaciSekce[1].vyhledavaciPodminka[0].vyhledavaciPodminkaHodnota[0].HodnotaDatumACasOd"
+DATE_TO_FIELD = "vyhledavaciSekce[1].vyhledavaciPodminka[0].vyhledavaciPodminkaHodnota[0].HodnotaDatumACasDo"
+DPH_PHRASE = "daň z přidané hodnoty"
 
 
 def fetch_nss() -> list[ScrapedItem]:
@@ -49,67 +61,108 @@ def _fetch() -> Iterable[ScrapedItem]:
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT, "Accept-Language": "cs,en;q=0.8"})
 
-    # Step 1: load the landing page so we collect JSF ViewState tokens.
-    landing = session.get(SEARCH_URL, timeout=TIMEOUT)
+    landing = session.get(BASE_URL, timeout=TIMEOUT)
     landing.raise_for_status()
     soup = BeautifulSoup(landing.text, "lxml")
-    viewstate = _extract_viewstate(soup)
+    form = soup.find("form", id="findform")
+    if form is None:
+        log.warning("NSS landing page has no findform — site layout changed.")
+        return
 
-    # Step 2: POST search filters. Field names follow the public form.
-    form_data = {
-        "javax.faces.ViewState": viewstate or "",
-        "form:agenda": "Afs",
-        "form:dateFrom": date_from,
-        "form:dateTo": date_to,
-        "form:pole_text": "daň z přidané hodnoty",
-        "form:search": "Vyhledat",
+    overrides = {
+        FULLTEXT_FIELD: DPH_PHRASE,
+        DATE_FROM_FIELD: date_from,
+        DATE_TO_FIELD: date_to,
     }
-    resp = session.post(SEARCH_URL, data=form_data, timeout=TIMEOUT)
+    form_data = _collect_form_fields(form, overrides)
+
+    resp = session.post(
+        SUBMIT_URL,
+        data=form_data,
+        headers={"Referer": BASE_URL},
+        timeout=TIMEOUT,
+    )
     resp.raise_for_status()
-    results = BeautifulSoup(resp.text, "lxml")
-
-    yield from _parse_results(results)
+    yield from _parse_results(BeautifulSoup(resp.text, "lxml"))
 
 
-def _extract_viewstate(soup: BeautifulSoup) -> str | None:
-    tag = soup.find("input", {"name": "javax.faces.ViewState"})
-    return tag.get("value") if tag else None
+def _collect_form_fields(form: Tag, overrides: dict[str, str]) -> list[tuple[str, str]]:
+    """Harvest all form inputs to replay the POST. Respect radio/checkbox semantics."""
+    data: list[tuple[str, str]] = []
+    applied: set[str] = set()
+    for el in form.find_all(["input", "textarea", "select"]):
+        name = el.get("name")
+        if not name:
+            continue
+        t = (el.get("type") or el.name).lower()
+        if t in ("submit", "button", "image", "reset", "file"):
+            continue
+        if name in overrides:
+            data.append((name, overrides[name]))
+            applied.add(name)
+            continue
+        if t == "radio":
+            if el.has_attr("checked"):
+                data.append((name, el.get("value", "")))
+        elif t == "checkbox":
+            if el.has_attr("checked"):
+                data.append((name, el.get("value") or "on"))
+        elif el.name == "select":
+            selected = el.find("option", selected=True) or el.find("option")
+            data.append((name, selected.get("value", "") if selected else ""))
+        else:
+            data.append((name, el.get("value") or ""))
+
+    missing = set(overrides) - applied
+    if missing:
+        log.warning("NSS form is missing expected fields: %s", sorted(missing))
+    return data
 
 
-SPIS_ZN_RE = re.compile(r"\b\d+\s*Afs\s*\d+/\d{4}(?:\s*-\s*\d+)?\b", re.IGNORECASE)
-DATE_RE = re.compile(r"\b(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})\b")
+SPIS_ZN_RE = re.compile(r"\b\d+\s*Afs\s*\d+\s*/\s*\d{4}(?:\s*-\s*\d+)?\b", re.IGNORECASE)
+DATE_CELL_RE = re.compile(r"^\s*(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})")
 
 
 def _parse_results(soup: BeautifulSoup) -> Iterable[ScrapedItem]:
-    # The results appear as table rows or list items with links to the decision detail.
-    # We scan all links and keep those that look like NSS decisions with Afs signature.
-    for link in soup.select("a[href]"):
-        href = link.get("href", "")
-        text = link.get_text(" ", strip=True)
-        if not href or not text:
-            continue
+    # Result table has columns: # | Datum | Číslo jednací | Soud (senát) |
+    # Druh dokumentu | Výrok | Účastníci | Právní věta | Kasační/ústavní | Možnosti.
+    table = soup.find("table", id="tresults")
+    if table is None:
+        log.info("NSS results table not found (zero results or redesign).")
+        return
 
-        m = SPIS_ZN_RE.search(text) or SPIS_ZN_RE.search(href)
+    for tr in table.find_all("tr"):
+        cells = tr.find_all("td")
+        # Data rows have columns: # | (empty) | Datum | Čj. | Soud | Druh | Výrok | Účastníci | ...
+        if len(cells) < 4:
+            continue  # header / spacer row
+        date_txt = cells[2].get_text(" ", strip=True)
+        spis_txt = cells[3].get_text(" ", strip=True)
+
+        m = SPIS_ZN_RE.search(spis_txt)
         if not m:
-            continue
+            continue  # non-Afs agenda (As, Ads, ...) — skip
 
         spis_zn = _normalize_spis_zn(m.group(0))
-        full_url = requests.compat.urljoin(SEARCH_URL, href)
+        parties = cells[7].get_text(" ", strip=True) if len(cells) > 7 else ""
+        vyrok = cells[6].get_text(" ", strip=True) if len(cells) > 6 else ""
 
-        # Date: look for a nearby YYYY-MM-DD or DD.MM.YYYY in the row's parent text.
-        container = link.find_parent(["tr", "li", "div"]) or link
-        container_text = container.get_text(" ", strip=True)
-        item_date = _extract_date(container_text)
+        detail = tr.find("a", href=re.compile(r"/DokumentDetail/Index/"))
+        url = urljoin(BASE_URL, detail.get("href", "")) if detail else BASE_URL
 
-        if not _is_dph_related(container_text):
-            continue
+        title_parts = [spis_zn]
+        if vyrok:
+            title_parts.append(vyrok)
+        if parties:
+            title_parts.append(parties)
+        title = " — ".join(title_parts)[:250]
 
         yield ScrapedItem(
             source="NSS",
             item_key=spis_zn,
-            title=f"{spis_zn} — {_extract_title(container_text, spis_zn)}",
-            url=full_url,
-            item_date=item_date or "",
+            title=title,
+            url=url,
+            item_date=_parse_date(date_txt) or "",
         )
 
 
@@ -117,21 +170,9 @@ def _normalize_spis_zn(raw: str) -> str:
     return re.sub(r"\s+", " ", raw.strip())
 
 
-def _extract_date(text: str) -> str | None:
-    m = DATE_RE.search(text)
+def _parse_date(text: str) -> str | None:
+    m = DATE_CELL_RE.match(text)
     if not m:
         return None
     d, mth, y = m.groups()
     return f"{int(y):04d}-{int(mth):02d}-{int(d):02d}"
-
-
-def _is_dph_related(text: str) -> bool:
-    lower = text.lower()
-    return any(t.lower() in lower for t in DPH_TERMS)
-
-
-def _extract_title(container_text: str, spis_zn: str) -> str:
-    # Best-effort: strip the spis. zn. and trim surrounding whitespace/separators.
-    cleaned = container_text.replace(spis_zn, "").strip(" -–|\t")
-    # Cut overly long text (the DB/emails are readable, keep ~200 chars).
-    return cleaned[:200] if cleaned else spis_zn
