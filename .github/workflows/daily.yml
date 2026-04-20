@@ -40,6 +40,10 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           RECIPIENT: leitnerczechia@gmail.com
+          # Manual workflow_dispatch runs bypass weekend / already-ran / morning-window
+          # guards so we can trigger a real end-to-end test on demand. Scheduled cron
+          # runs leave this unset and keep the normal gating.
+          TAX_MONITOR_FORCE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
         run: python main.py
 
       - name: Persist state.db
