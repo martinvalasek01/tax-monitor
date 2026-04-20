@@ -6,6 +6,8 @@ venv/
 .env
 *.db
 *.db-journal
+# state.db is the monitor's dedup store and IS tracked — every run commits updates.
+!state.db
 *.log
 .DS_Store
 .idea/

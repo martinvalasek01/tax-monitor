@@ -49,12 +49,19 @@ jobs:
       - name: Persist state.db
         if: always()
         run: |
-          if [ -f state.db ] && ! git diff --quiet -- state.db; then
-            git config user.name "tax-monitor bot"
-            git config user.email "tax-monitor@users.noreply.github.com"
-            git add state.db
+          if [ ! -f state.db ]; then
+            echo "state.db does not exist — nothing to commit."
+            exit 0
+          fi
+          git config user.name "tax-monitor bot"
+          git config user.email "tax-monitor@users.noreply.github.com"
+          git add state.db
+          # `git diff --cached` catches both new-file and modified cases;
+          # the previous `git diff` check missed new files (state.db was
+          # untracked because of .gitignore, so diff saw no change).
+          if git diff --cached --quiet -- state.db; then
+            echo "state.db unchanged — nothing to commit."
+          else
             git commit -m "chore: update state.db [skip ci]"
             git push
-          else
-            echo "state.db unchanged — nothing to commit."
           fi
