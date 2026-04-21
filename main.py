@@ -42,9 +42,8 @@ def main() -> int:
             return 0
 
         # We schedule two UTC crons (04:00 and 05:00) to cover both DST states,
-        # but only the one that lands at 06:00 CZ should actually send. Allow
-        # 06:00–07:59 to tolerate cron drift (GitHub Actions can delay 5–15 min).
-        if not FORCE and not (6 <= now_cz.hour <= 7):
+        # but only the one that lands at 06:00 CZ should actually send. # Allow 06:00–10:59 to tolerate cron drift (GitHub Actions often delays 1–4 hours).
+        if not FORCE and not (6 <= now_cz.hour <= 10):
             log.info("Outside morning window (CZ hour=%d) — skipping.", now_cz.hour)
             return 0
 
