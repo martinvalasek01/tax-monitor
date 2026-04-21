@@ -35,7 +35,7 @@ USER_AGENT = (
     "(KHTML, like Gecko) tax-monitor/1.0 Safari/537.36"
 )
 TIMEOUT = 30
-LOOKBACK_DAYS = 7
+LOOKBACK_DAYS = 14
 
 FULLTEXT_FIELD = "vyhledavaciSekce[3].vyhledavaciPodminka[0].vyhledavaciPodminkaHodnota[0].HodnotaText"
 DATE_FROM_FIELD = "vyhledavaciSekce[1].vyhledavaciPodminka[0].vyhledavaciPodminkaHodnota[0].HodnotaDatumACasOd"
