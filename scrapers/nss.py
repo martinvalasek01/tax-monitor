@@ -3,9 +3,12 @@
 The search form is an ASP.NET MVC app with a deep model-binding schema
 (vyhledavaciSekce[i].vyhledavaciPodminka[j]...). We harvest every input
 from the landing page — including the antiforgery token — override only
-the two values we care about (full-text phrase + date range), and POST
-to /Home/Index?formular=1&zobrazeniVysledkuVolba=2. Results come back
-as table#tresults rows.
+the structured "Oblast úpravy" filter (codebook id for DPH) and the date
+range, and POST to /Home/Index?formular=1&zobrazeniVysledkuVolba=2.
+Results come back as table#tresults rows.
+
+We deliberately do NOT fulltext-match "daň z přidané hodnoty" — that also
+hit judgments where DPH was merely mentioned in passing.
 
 Selectors target the current public page structure — if NSS redesigns
 the site, adjust here.
@@ -37,7 +40,16 @@ LOOKBACK_DAYS = 7
 FULLTEXT_FIELD = "vyhledavaciSekce[3].vyhledavaciPodminka[0].vyhledavaciPodminkaHodnota[0].HodnotaText"
 DATE_FROM_FIELD = "vyhledavaciSekce[1].vyhledavaciPodminka[0].vyhledavaciPodminkaHodnota[0].HodnotaDatumACasOd"
 DATE_TO_FIELD = "vyhledavaciSekce[1].vyhledavaciPodminka[0].vyhledavaciPodminkaHodnota[0].HodnotaDatumACasDo"
-DPH_PHRASE = "daň z přidané hodnoty"
+
+# Structured "Oblast úpravy" filter (FIELD_DIALTREE codebook on card#oblastupravy).
+# The comboTree widget posts two names per card:
+#   * HodnotaCiselnikPolozky         — visible, comma-separated titles
+#   * HodnotaCiselnikPolozkySelected — hidden, comma-separated codebook IDs
+# The backend binds on the IDs. Id 164 = "Daně - daň z přidané hodnoty".
+OBLAST_FIELD = "vyhledavaciSekce[2].vyhledavaciPodminka[0].vyhledavaciPodminkaHodnota[0].HodnotaCiselnikPolozky"
+OBLAST_SELECTED_FIELD = OBLAST_FIELD + "Selected"
+DPH_OBLAST_ID = "164"
+DPH_OBLAST_TITLE = "Daně - daň z přidané hodnoty"
 
 
 def fetch_nss() -> list[ScrapedItem]:
@@ -70,11 +82,15 @@ def _fetch() -> Iterable[ScrapedItem]:
         return
 
     overrides = {
-        FULLTEXT_FIELD: DPH_PHRASE,
+        FULLTEXT_FIELD: "",
+        OBLAST_FIELD: DPH_OBLAST_TITLE,
         DATE_FROM_FIELD: date_from,
         DATE_TO_FIELD: date_to,
     }
+    # OBLAST_SELECTED_FIELD is injected by comboTree at runtime, so it is not
+    # in the landing HTML — append it explicitly so the server sees the ID.
     form_data = _collect_form_fields(form, overrides)
+    form_data.append((OBLAST_SELECTED_FIELD, DPH_OBLAST_ID))
 
     resp = session.post(
         SUBMIT_URL,
