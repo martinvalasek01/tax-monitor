@@ -7,7 +7,7 @@ položky a pošle přehled emailem na `leitnerczechia@gmail.com`.
 
 | Zdroj   | URL                                                                 | Co sleduje                                    |
 | ------- | ------------------------------------------------------------------- | --------------------------------------------- |
-| NSS     | https://vyhledavac.nssoud.cz/                                       | Agenda Afs, fulltext "daň z přidané hodnoty" |
+| NSS     | https://vyhledavac.nssoud.cz/                                       | Agenda Afs, Oblast úpravy = Daně - daň z přidané hodnoty (číselník id 164) |
 | GFŘ     | https://www.financnisprava.gov.cz/cs/financni-sprava/novinky        | Novinky obsahující "DPH"                      |
 | EUR-Lex | https://eur-lex.europa.eu/ (advanced search RSS)                    | Nové rozsudky SDEU s frází "value added tax" |
 
