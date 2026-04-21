@@ -53,6 +53,16 @@ tax-monitor/
 └── .github/workflows/daily.yml  # GitHub Actions cron
 ```
 
+## Známé problémy
+
+- **gfr.py používá keyword filtr "dph"** (viz `DPH_TERMS` ve `scrapers/gfr.py`),
+  který běží jen nad titulkem + kontextem na listing stránce. To vede k false
+  positives (novinka jen mimochodem zmíní DPH) i false negatives (relevantní
+  novinka, která v titulku nemá "DPH" ani "daň z přidané hodnoty").
+  Plánovaný fix: přejít na filtrování podle tagu/URL-segmentu přes
+  `financnisprava.gov.cz/cs/dane/dan-z-pridane-hodnoty/` nebo přes RSS feed
+  s kategorií DPH.
+
 ---
 
 ## Nasazení — krok za krokem
